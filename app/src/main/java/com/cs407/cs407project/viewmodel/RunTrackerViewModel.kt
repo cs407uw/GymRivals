@@ -97,7 +97,7 @@ class RunTrackerViewModel(app: Application) : AndroidViewModel(app) {
         timerJob?.cancel()
         timerJob = null
     }
-
+// Test location
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates() {
         fused.requestLocationUpdates(locationRequest, callback, null)

@@ -28,6 +28,7 @@ import com.cs407.cs407project.ui.tabs.ProfileScreen
 import com.cs407.cs407project.ui.track.TrackRunScreen
 import com.example.gymrivals.ui.GymRivalsLoginScreen
 import com.cs407.cs407project.ui.strength.StrengthWorkoutScreen
+import com.cs407.cs407project.ui.repcounter.RepCounterScreen
 
 private object Routes {
     const val Login = "login"
@@ -38,6 +39,7 @@ private object Routes {
     const val Profile = "profile"
     const val TrackRun = "track_run"
     const val Strength = "strength_workout"
+    const val RepCounter = "rep_counter"
 }
 
 private val BottomItems = listOf(
@@ -83,18 +85,13 @@ fun AppNav(
             tabDestination(Routes.Log, currentRoute, navController) {
                 LogScreen(
                     onTrackRun = { navController.navigate(Routes.TrackRun) },
-                    onAddStrength = {navController.navigate(Routes.Strength)}
+                    onAddStrength = { navController.navigate(Routes.Strength) },
+                    onRepCounter = { navController.navigate(Routes.RepCounter) }
                 )
             }
             tabDestination(Routes.Progress, currentRoute, navController) { ProgressScreen() }
             tabDestination(Routes.Rivals, currentRoute, navController) { RivalsScreen() }
             tabDestination(Routes.Profile, currentRoute, navController) { ProfileScreen() }
-            tabDestination(Routes.Log, currentRoute, navController) {
-                LogScreen(
-                    onTrackRun = { navController.navigate(Routes.TrackRun) },
-                    onAddStrength = { navController.navigate(Routes.Strength) } // <-- NEW
-                )
-            }
 
             // Track Run (no bottom bar, has back)
             composable(Routes.TrackRun) {
@@ -108,6 +105,11 @@ fun AppNav(
                         navController.popBackStack()
                     }
                 )
+            }
+
+            // Rep Counter (no bottom bar, has back)
+            composable(Routes.RepCounter) {
+                RepCounterScreen(onBack = { navController.popBackStack() })
             }
         }
     }
