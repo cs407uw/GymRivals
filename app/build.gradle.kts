@@ -58,4 +58,14 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // ML Kit Pose Detection
+    implementation("com.google.mlkit:pose-detection:18.0.0-beta4")
+    implementation("com.google.mlkit:pose-detection-accurate:18.0.0-beta4")
+
+    // CameraX
+    implementation("androidx.camera:camera-core:1.3.0")
+    implementation("androidx.camera:camera-camera2:1.3.0")
+    implementation("androidx.camera:camera-lifecycle:1.3.0")
+    implementation("androidx.camera:camera-view:1.3.0")
 }

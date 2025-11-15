@@ -25,6 +25,8 @@ import com.cs407.cs407project.data.RunHistoryRepository
 import com.cs407.cs407project.data.StrengthExercise
 import com.cs407.cs407project.data.StrengthWorkout
 import com.cs407.cs407project.data.StrengthWorkoutRepository
+import com.cs407.cs407project.data.RepCountRepository
+import com.cs407.cs407project.data.RepSession
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -37,6 +39,7 @@ fun ProgressScreen() {
 
     val runs by RunHistoryRepository.runs.collectAsState()
     val lifts by StrengthWorkoutRepository.workouts.collectAsState()
+    val repSessions by RepCountRepository.sessions.collectAsState()
 
     // Top-level menu: Running / Lifting / Bodyweight
     val tabs = listOf("Running", "Lifting", "Bodyweight")
@@ -60,7 +63,7 @@ fun ProgressScreen() {
     var selectedLift by rememberSaveable { mutableStateOf(allLiftNames.firstOrNull() ?: "") }
 
     // Bodyweight selection
-    val bodyweightOptions = listOf("Push Ups", "Pull Ups")
+    val bodyweightOptions = listOf("Push-ups (AI)", "Squats (AI)", "Push Ups (Manual)", "Pull Ups (Manual)")
     var selectedBodyweight by rememberSaveable { mutableStateOf(bodyweightOptions.first()) }
 
     Column(
@@ -187,25 +190,55 @@ fun ProgressScreen() {
                     }
                     Spacer(Modifier.height(12.dp))
 
-                    val last5 = remember(lifts, selectedBodyweight) {
-                        val names = when (selectedBodyweight) {
-                            "Push Ups" -> listOf("Push Up", "Push-Up", "Push Ups", "Push-ups", "Pushup", "Pushups")
-                            else -> listOf("Pull Up", "Pull-Up", "Pull Ups", "Pull-ups", "Pullup", "Pullups")
+                    // Determine if this is AI-counted or manual entry
+                    val isAiCounted = selectedBodyweight.contains("(AI)")
+
+                    if (isAiCounted) {
+                        // Show data from RepCountRepository
+                        val exerciseType = when (selectedBodyweight) {
+                            "Push-ups (AI)" -> "Push up"
+                            "Squats (AI)" -> "Squat"
+                            else -> ""
                         }
-                        last5BodyweightSessions(lifts, names)
+
+                        val last5 = remember(repSessions, exerciseType) {
+                            last5RepCounterSessions(repSessions, exerciseType)
+                        }
+
+                        ChartCard(
+                            title = "$selectedBodyweight — last 5 sessions",
+                            subtitle = "Bars = total reps • Labels = duration"
+                        ) {
+                            SessionBarChart(
+                                values = last5.map { it.totalReps.toDouble() },
+                                bottomLabels = last5.map { "${it.durationSeconds}s" },
+                                topTitle = "Total reps",
+                                emptyText = "No sessions found. Start the Rep Counter to track reps!"
+                            )
+                        }
+                    } else {
+                        // Show data from StrengthWorkoutRepository (manual entry)
+                        val last5 = remember(lifts, selectedBodyweight) {
+                            val names = when (selectedBodyweight) {
+                                "Push Ups (Manual)" -> listOf("Push Up", "Push-Up", "Push Ups", "Push-ups", "Pushup", "Pushups")
+                                else -> listOf("Pull Up", "Pull-Up", "Pull Ups", "Pull-ups", "Pullup", "Pullups")
+                            }
+                            last5BodyweightSessions(lifts, names)
+                        }
+
+                        ChartCard(
+                            title = "$selectedBodyweight — last 5 sessions",
+                            subtitle = "Bars = total reps • Labels = sets"
+                        ) {
+                            SessionBarChart(
+                                values = last5.map { it.totalReps.toDouble() },
+                                bottomLabels = last5.map { "${it.sets} sets" },
+                                topTitle = "Total reps",
+                                emptyText = "No sessions found."
+                            )
+                        }
                     }
 
-                    ChartCard(
-                        title = "$selectedBodyweight — last 5 sessions",
-                        subtitle = "Bars = total reps • Labels = sets"
-                    ) {
-                        SessionBarChart(
-                            values = last5.map { it.totalReps.toDouble() },
-                            bottomLabels = last5.map { "${it.sets} sets" },
-                            topTitle = "Total reps",
-                            emptyText = "No sessions found."
-                        )
-                    }
                     Spacer(Modifier.height(16.dp))
                 }
             }
@@ -541,6 +574,30 @@ private fun last5BodyweightSessions(workouts: List<StrengthWorkout>, anyOfNames:
         }
     }
     return hits.sortedBy { it.dateMs }.takeLast(5)
+}
+
+/**
+ * Extract last 5 sessions from RepCountRepository for a specific exercise type
+ *
+ * @param sessions All rep counting sessions
+ * @param exerciseType The exercise type to filter (e.g., "Push up", "Squat")
+ * @return List of up to 5 most recent sessions
+ */
+private fun last5RepCounterSessions(sessions: List<RepSession>, exerciseType: String): List<LiftSession> {
+    val norm = exerciseType.lowercase(Locale.getDefault())
+    val hits = sessions
+        .filter { it.exerciseType.lowercase(Locale.getDefault()) == norm }
+        .sortedBy { it.timestampMs }
+        .takeLast(5)
+        .map { repSession ->
+            LiftSession(
+                dateMs = repSession.timestampMs,
+                totalReps = repSession.totalReps,
+                sets = repSession.durationSeconds, // Store duration in sets field for display
+                weightLbs = 0
+            )
+        }
+    return hits
 }
 
 /* ---- Tiny dropdown used above ---- */

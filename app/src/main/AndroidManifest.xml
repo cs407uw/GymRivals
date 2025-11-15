@@ -8,8 +8,12 @@
     <!-- Optional if you use motion sensors (step counting, etc.) -->
     <!-- <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" /> -->
 
+    <!-- Camera permission for rep counting -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <!-- Optional feature declaration (not required but good practice) -->
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:allowBackup="true"

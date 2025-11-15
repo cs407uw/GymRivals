@@ -21,7 +21,8 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun LogScreen(
     onTrackRun: () -> Unit,
-    onAddStrength: () -> Unit
+    onAddStrength: () -> Unit,
+    onRepCounter: () -> Unit
 ) {
     val gradient = Brush.horizontalGradient(listOf(Color(0xFF0EA5E9), Color(0xFF7C3AED)))
 
@@ -59,6 +60,14 @@ fun LogScreen(
             title = "Add Strength Workout",
             desc = "Build a workout by choosing exercises, sets, reps, and rest."
         ) { PrimaryGradientButton("Add Strength Workout", onClick = onAddStrength) }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Rep Counter
+        ActionCard(
+            title = "Rep Counter",
+            desc = "Use your camera to automatically count push-ups and squats with AI."
+        ) { PrimaryGradientButton("Start Rep Counter", onClick = onRepCounter) }
     }
 }
 
