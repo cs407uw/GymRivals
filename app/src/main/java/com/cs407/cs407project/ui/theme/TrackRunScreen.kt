@@ -22,6 +22,7 @@ import com.cs407.cs407project.viewmodel.RunTrackerViewModel
 import com.cs407.cs407project.viewmodel.RunUiState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.cs407.cs407project.data.GymRivalsCloudRepository
 import com.cs407.cs407project.data.RunHistoryRepository
 import com.cs407.cs407project.data.RunEntry
 import com.google.android.gms.maps.CameraUpdateFactory
@@ -231,7 +232,12 @@ fun TrackRunScreen(
                         distanceMeters = state.distanceMeters,
                         elapsedMillis = state.elapsedMillis
                     )
+
+                    // 1) Save locally
                     RunHistoryRepository.addRun(entry)
+
+                    // 2) Save to Firestore
+                    GymRivalsCloudRepository.addRun(entry)
 
                     runVm.stopRun()
                     onBack()

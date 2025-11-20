@@ -23,12 +23,50 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import com.cs407.cs407project.data.RepCountRepository
+import com.cs407.cs407project.data.RunHistoryRepository
+import com.cs407.cs407project.data.StrengthWorkoutRepository
+import com.cs407.cs407project.data.RunEntry
+import com.cs407.cs407project.data.StrengthWorkout
+import com.cs407.cs407project.data.RepSession
+import com.google.firebase.auth.FirebaseAuth
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.Calendar
 
 @Composable
-fun GymRivalsHomeScreen(userName: String = "Alex") {
+fun GymRivalsHomeScreen() {
     val appGradient = Brush.horizontalGradient(
         listOf(Color(0xFF0EA5E9), Color(0xFF7C3AED))
     )
+
+    // ---- Current user display name ----
+    val firebaseUser = FirebaseAuth.getInstance().currentUser
+    val email = firebaseUser?.email ?: "guest@gymrivals.app"
+    val displayName = firebaseUser?.displayName
+        ?.takeIf { it.isNotBlank() }
+        ?: email.substringBefore("@")
+            .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+
+    // ---- Real workout data from repositories ----
+    val runs by RunHistoryRepository.runs.collectAsState()
+    val lifts by StrengthWorkoutRepository.workouts.collectAsState()
+    val repSessions by RepCountRepository.sessions.collectAsState()
+
+    val recentItems = remember(runs, lifts, repSessions) {
+        buildRecentWorkoutItems(runs, lifts, repSessions)
+            .sortedByDescending { it.timestampMs }
+            .take(3) // show the 3 most recent
+    }
+
+    // Day streak = consecutive days (ending today) with any workout
+    val dayStreak = remember(runs, lifts, repSessions) {
+        computeDayStreak(runs, lifts, repSessions)
+    }
 
     Surface(color = Color(0xFFF6F7FB)) {
         Column(
@@ -95,13 +133,18 @@ fun GymRivalsHomeScreen(userName: String = "Alex") {
                         ) {
                             Column {
                                 Text(
-                                    "Welcome back, $userName! 💪",
+                                    "Welcome back, $displayName! 💪",
                                     color = Color.White,
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 16.sp
                                 )
+                                val streakLine = if (dayStreak > 0) {
+                                    "You’re on a $dayStreak day streak. Keep it up!"
+                                } else {
+                                    "No streak yet — log a workout today to start one!"
+                                }
                                 Text(
-                                    "You’re on a 5 day streak. Keep it up!",
+                                    streakLine,
                                     color = Color.White.copy(alpha = 0.95f),
                                     fontSize = 13.sp
                                 )
@@ -110,40 +153,44 @@ fun GymRivalsHomeScreen(userName: String = "Alex") {
                     }
                 }
 
-                // Stats grid
+                // Stats grid (still mocked for now)
                 item { Spacer(Modifier.height(10.dp)) }
                 item {
                     StatsGrid(
                         listOf(
                             StatCardData("🔥", "1,250", "Weekly Points", Color(0xFFFFEDD5)),
-                            StatCardData("📅", "5", "Day Streak", Color(0xFFEFFDEE)),
+                            StatCardData("📅", dayStreak.toString(), "Day Streak", Color(0xFFEFFDEE)),
                             StatCardData("🧩", "4", "Workouts", Color(0xFFEFF6FF)),
                             StatCardData("💓", "2,800", "Calories", Color(0xFFFFF1F2))
                         )
                     )
                 }
 
-                // Recent workouts
+                // Recent workouts (real data)
                 item { Spacer(Modifier.height(10.dp)) }
                 item {
                     SectionCard(title = "Recent Workouts") {
-                        RecentWorkoutRow(
-                            title = "Upper Body Strength",
-                            subtitle = "Today • 8 exercises",
-                            points = 300
-                        )
-                        HorizontalDivider(thickness = 1.dp, color = Color(0xFFE8ECF3))
-                        RecentWorkoutRow(
-                            title = "Morning Run",
-                            subtitle = "Yesterday • 5.2 km",
-                            points = 250
-                        )
-                        HorizontalDivider(thickness = 1.dp, color = Color(0xFFE8ECF3))
-                        RecentWorkoutRow(
-                            title = "Leg Day",
-                            subtitle = "2 days ago • 6 exercises",
-                            points = 350
-                        )
+                        if (recentItems.isEmpty()) {
+                            Text(
+                                "No workouts yet. Start a run, strength workout, or rep session to see it here.",
+                                color = Color(0xFF6B7280),
+                                fontSize = 13.sp
+                            )
+                        } else {
+                            recentItems.forEachIndexed { index, item ->
+                                if (index > 0) {
+                                    HorizontalDivider(
+                                        thickness = 1.dp,
+                                        color = Color(0xFFE8ECF3)
+                                    )
+                                }
+                                RecentWorkoutRow(
+                                    title = item.title,
+                                    subtitle = item.subtitle,
+                                    points = item.points
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -241,7 +288,13 @@ private fun RecentWorkoutRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.Medium, color = Color(0xFF111827))
-            Text(subtitle, fontSize = 12.sp, color = Color(0xFF6B7280), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                subtitle,
+                fontSize = 12.sp,
+                color = Color(0xFF6B7280),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
         PointsPill(points)
     }
@@ -259,6 +312,114 @@ private fun PointsPill(points: Int) {
     ) {
         Text("+$points pts", fontSize = 12.sp, color = Color(0xFF2563EB), fontWeight = FontWeight.SemiBold)
     }
+}
+
+/* ---------------- Recent-workout feed helpers ---------------- */
+
+private data class RecentWorkoutItem(
+    val timestampMs: Long,
+    val title: String,
+    val subtitle: String,
+    val points: Int
+)
+
+/**
+ * Build a unified recent-workouts feed from runs, strength workouts,
+ * and rep-counter sessions.
+ */
+private fun buildRecentWorkoutItems(
+    runs: List<RunEntry>,
+    lifts: List<StrengthWorkout>,
+    repSessions: List<RepSession>
+): List<RecentWorkoutItem> {
+    val items = mutableListOf<RecentWorkoutItem>()
+
+    // Runs
+    runs.forEach { run ->
+        val miles = run.miles
+        val milesStr = "%.2f mi".format(miles)
+        val whenStr = formatShortDate(run.timestampMs)
+        val subtitle = "$whenStr • $milesStr"
+
+        // Simple points: 100 per mile
+        val points = (miles * 100).toInt().coerceAtLeast(0)
+
+        items += RecentWorkoutItem(
+            timestampMs = run.timestampMs,
+            title = "Run",
+            subtitle = subtitle,
+            points = points
+        )
+    }
+
+    // Strength workouts
+    lifts.forEach { workout ->
+        val exerciseCount = workout.exercises.size
+        val totalReps = workout.exercises.sumOf { it.sets * it.reps }
+        val whenStr = formatShortDate(workout.timestampMs)
+        val subtitle = "$whenStr • $exerciseCount exercises"
+
+        items += RecentWorkoutItem(
+            timestampMs = workout.timestampMs,
+            title = workout.title.ifBlank { "Strength Workout" },
+            subtitle = subtitle,
+            points = totalReps // use total reps as points
+        )
+    }
+
+    // Rep-counter sessions (AI bodyweight)
+    repSessions.forEach { session ->
+        val whenStr = formatShortDate(session.timestampMs)
+        val subtitle = "$whenStr • ${session.totalReps} reps"
+
+        items += RecentWorkoutItem(
+            timestampMs = session.timestampMs,
+            title = session.exerciseType.ifBlank { "Bodyweight Session" },
+            subtitle = subtitle,
+            points = session.totalReps
+        )
+    }
+
+    return items
+}
+
+/**
+ * Compute consecutive-day streak ending today.
+ * A "workout day" is any day with at least one run, strength workout, or rep session.
+ */
+private fun computeDayStreak(
+    runs: List<RunEntry>,
+    lifts: List<StrengthWorkout>,
+    repSessions: List<RepSession>
+): Int {
+    if (runs.isEmpty() && lifts.isEmpty() && repSessions.isEmpty()) return 0
+
+    val fmt = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+    val workoutDays = HashSet<String>()
+
+    runs.forEach { workoutDays += fmt.format(Date(it.timestampMs)) }
+    lifts.forEach { workoutDays += fmt.format(Date(it.timestampMs)) }
+    repSessions.forEach { workoutDays += fmt.format(Date(it.timestampMs)) }
+
+    val cal = Calendar.getInstance()
+    var streak = 0
+
+    while (true) {
+        val key = fmt.format(cal.time)
+        if (workoutDays.contains(key)) {
+            streak++
+            cal.add(Calendar.DAY_OF_YEAR, -1)
+        } else {
+            break
+        }
+    }
+
+    return streak
+}
+
+private fun formatShortDate(ms: Long): String {
+    val fmt = SimpleDateFormat("MMM d", Locale.getDefault())
+    return fmt.format(Date(ms))
 }
 
 @Preview(showBackground = true, showSystemUi = true)

@@ -20,6 +20,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.cs407.cs407project.data.GymRivalsCloudRepository
 import com.cs407.cs407project.data.RunEntry
 import com.cs407.cs407project.data.RunHistoryRepository
 import com.cs407.cs407project.data.StrengthExercise
@@ -66,6 +67,16 @@ fun ProgressScreen() {
     val bodyweightOptions = listOf("Push-ups (AI)", "Squats (AI)", "Push Ups (Manual)", "Pull Ups (Manual)")
     var selectedBodyweight by rememberSaveable { mutableStateOf(bodyweightOptions.first()) }
 
+
+    // Keep local rep sessions in sync with Firestore
+    DisposableEffect(Unit) {
+        val registration = GymRivalsCloudRepository.listenRepSessions { sessions ->
+            RepCountRepository.overwriteAll(sessions)
+        }
+        onDispose {
+            registration?.remove()
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
