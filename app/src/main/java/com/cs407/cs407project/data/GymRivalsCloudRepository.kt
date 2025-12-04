@@ -4,6 +4,8 @@ import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
+
 
 /**
  * Central Firestore access for GymRivals.
@@ -104,23 +106,44 @@ object GymRivalsCloudRepository {
     // ------------------------------------------------------------------------
 
     /** Firestore DTO for a RunEntry (needs default values for Firestore). */
+    private data class FireRunPoint(
+        val lat: Double = 0.0,
+        val lng: Double = 0.0
+    ) {
+        fun toDomain(): RunPathPoint = RunPathPoint(
+            lat = lat,
+            lng = lng
+        )
+
+        companion object {
+            fun from(domain: RunPathPoint) = FireRunPoint(
+                lat = domain.lat,
+                lng = domain.lng
+            )
+        }
+    }
+
+    /** Firestore DTO for a RunEntry (needs default values for Firestore). */
     private data class FireRunEntry(
         val timestampMs: Long = 0L,
         val distanceMeters: Double = 0.0,
-        val elapsedMillis: Long = 0L
+        val elapsedMillis: Long = 0L,
+        val path: List<FireRunPoint> = emptyList()
     ) {
         fun toDomain(): RunEntry =
             RunEntry(
                 timestampMs = timestampMs,
                 distanceMeters = distanceMeters,
-                elapsedMillis = elapsedMillis
+                elapsedMillis = elapsedMillis,
+                path = path.map { it.toDomain() }
             )
 
         companion object {
             fun from(domain: RunEntry) = FireRunEntry(
                 timestampMs = domain.timestampMs,
                 distanceMeters = domain.distanceMeters,
-                elapsedMillis = domain.elapsedMillis
+                elapsedMillis = domain.elapsedMillis,
+                path = domain.path.map { FireRunPoint.from(it) }
             )
         }
     }
@@ -170,6 +193,206 @@ object GymRivalsCloudRepository {
                 onUpdate(list)
             }
     }
+
+    data class WeeklyRunLeaderboardEntry(
+        val userId: String = "",
+        val displayName: String = "",
+        val weekStartMs: Long = 0L,
+        val totalMiles: Double = 0.0
+    )
+
+    /**
+     * Upsert this user's weekly miles into the shared leaderboard collection.
+     *
+     * @param weekStartMs start of the current week in ms (e.g., Monday 00:00)
+     * @param totalMiles  total miles run by this user in that week
+     */
+    fun updateWeeklyRunLeaderboard(
+        weekStartMs: Long,
+        totalMiles: Double,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        val user = auth.currentUser
+        if (user == null) {
+            Log.w(TAG, "updateWeeklyRunLeaderboard: no logged-in user")
+            onResult(false); return
+        }
+
+        // Use displayName if set, otherwise fall back to email prefix
+        val email = user.email ?: "user@gymrivals.app"
+        val displayName = user.displayName ?: email.substringBefore("@")
+
+        // one doc per user per week
+        val docId = "${weekStartMs}_${user.uid}"
+
+        val data = mapOf(
+            "userId" to user.uid,
+            "displayName" to displayName,
+            "weekStartMs" to weekStartMs,
+            "totalMiles" to totalMiles,
+            "updatedAt" to System.currentTimeMillis()
+        )
+
+        db.collection("weekly_run_leaderboard")
+            .document(docId)
+            .set(data)
+            .addOnSuccessListener {
+                Log.d(TAG, "Weekly leaderboard updated")
+                onResult(true)
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "updateWeeklyRunLeaderboard failed", e)
+                onResult(false)
+            }
+    }
+
+    /**
+     * Listen to the weekly leaderboard (all users) for a given week.
+     *
+     * @param weekStartMs start of the week in ms
+     */
+    fun listenWeeklyRunLeaderboard(
+        weekStartMs: Long,
+        onUpdate: (List<WeeklyRunLeaderboardEntry>) -> Unit
+    ): ListenerRegistration? {
+        return db.collection("weekly_run_leaderboard")
+            .whereEqualTo("weekStartMs", weekStartMs)
+            .addSnapshotListener { snap, e ->
+                if (e != null) {
+                    Log.e(TAG, "listenWeeklyRunLeaderboard snapshot error", e)
+                    onUpdate(emptyList())
+                    return@addSnapshotListener
+                }
+
+                val list = snap?.documents?.mapNotNull { doc ->
+                    val userId = doc.getString("userId") ?: return@mapNotNull null
+                    val displayName = doc.getString("displayName") ?: "Unknown"
+                    val week = doc.getLong("weekStartMs") ?: 0L
+                    val miles = doc.getDouble("totalMiles") ?: 0.0
+
+                    WeeklyRunLeaderboardEntry(
+                        userId = userId,
+                        displayName = displayName,
+                        weekStartMs = week,
+                        totalMiles = miles
+                    )
+                } ?: emptyList()
+
+                // sort + cap to 50 on the client
+                val sorted = list
+                    .sortedByDescending { it.totalMiles }
+                    .take(50)
+
+                onUpdate(sorted)
+            }
+    }
+
+    // ------------------------------------------------------------------------
+    //  WEEKLY REP LEADERBOARD (Push-ups / Squats via AI counter)
+    //  Collection: weekly_rep_leaderboard
+    // ------------------------------------------------------------------------
+
+    data class WeeklyRepLeaderboardEntry(
+        val userId: String = "",
+        val displayName: String = "",
+        val weekStartMs: Long = 0L,
+        val exerciseType: String = "",   // e.g. "PUSH_UP", "SQUAT"
+        val totalReps: Int = 0
+    )
+
+    /**
+     * Upsert this user's weekly reps into the shared rep leaderboard collection.
+     *
+     * @param weekStartMs   start of the current week in ms (e.g., Monday 00:00)
+     * @param exerciseType  key for exercise, e.g. "PUSH_UP" or "SQUAT"
+     * @param totalReps     total reps for that exercise this week
+     */
+    fun updateWeeklyRepLeaderboard(
+        weekStartMs: Long,
+        exerciseType: String,
+        totalReps: Int,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        val user = auth.currentUser
+        if (user == null) {
+            Log.w(TAG, "updateWeeklyRepLeaderboard: no logged-in user")
+            onResult(false); return
+        }
+
+        val email = user.email ?: "user@gymrivals.app"
+        val displayName = user.displayName ?: email.substringBefore("@")
+
+        // one doc per user per week per exercise type
+        val docId = "${weekStartMs}_${exerciseType}_${user.uid}"
+
+        val data = mapOf(
+            "userId" to user.uid,
+            "displayName" to displayName,
+            "weekStartMs" to weekStartMs,
+            "exerciseType" to exerciseType,
+            "totalReps" to totalReps,
+            "updatedAt" to System.currentTimeMillis()
+        )
+
+        db.collection("weekly_rep_leaderboard")
+            .document(docId)
+            .set(data)
+            .addOnSuccessListener {
+                Log.d(TAG, "Weekly rep leaderboard updated for $exerciseType")
+                onResult(true)
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "updateWeeklyRepLeaderboard failed", e)
+                onResult(false)
+            }
+    }
+
+    /**
+     * Listen to the weekly rep leaderboard (all users) for a given week + exercise type.
+     *
+     * @param weekStartMs  start of week in ms
+     * @param exerciseType e.g. "PUSH_UP" or "SQUAT"
+     */
+    fun listenWeeklyRepLeaderboard(
+        weekStartMs: Long,
+        exerciseType: String,
+        onUpdate: (List<WeeklyRepLeaderboardEntry>) -> Unit
+    ): ListenerRegistration? {
+        return db.collection("weekly_rep_leaderboard")
+            .whereEqualTo("weekStartMs", weekStartMs)
+            .whereEqualTo("exerciseType", exerciseType)
+            .addSnapshotListener { snap, e ->
+                if (e != null) {
+                    Log.e(TAG, "listenWeeklyRepLeaderboard snapshot error", e)
+                    onUpdate(emptyList())
+                    return@addSnapshotListener
+                }
+
+                val list = snap?.documents?.mapNotNull { doc ->
+                    val userId = doc.getString("userId") ?: return@mapNotNull null
+                    val displayName = doc.getString("displayName") ?: "Unknown"
+                    val week = doc.getLong("weekStartMs") ?: 0L
+                    val type = doc.getString("exerciseType") ?: ""
+                    val reps = (doc.getLong("totalReps") ?: 0L).toInt()
+
+                    WeeklyRepLeaderboardEntry(
+                        userId = userId,
+                        displayName = displayName,
+                        weekStartMs = week,
+                        exerciseType = type,
+                        totalReps = reps
+                    )
+                } ?: emptyList()
+
+                // sort + cap to 50 on the client
+                val sorted = list
+                    .sortedByDescending { it.totalReps }
+                    .take(50)
+
+                onUpdate(sorted)
+            }
+    }
+
 
     // ------------------------------------------------------------------------
     //  STRENGTH WORKOUTS: users/{uid}/strength_workouts/{workoutId}
@@ -296,7 +519,7 @@ object GymRivalsCloudRepository {
             )
         }
     }
-    
+
 
     /** Add a rep-counting session for the current user. */
     fun addRepSession(session: RepSession, onResult: (Boolean) -> Unit = {}) {

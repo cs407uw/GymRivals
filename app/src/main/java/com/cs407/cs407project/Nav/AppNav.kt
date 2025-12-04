@@ -32,12 +32,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.cs407.cs407project.R
 import com.cs407.cs407project.data.GymRivalsCloudRepository
+import com.cs407.cs407project.data.RepCountRepository
+import com.cs407.cs407project.data.RunHistoryRepository
+import com.cs407.cs407project.data.StrengthWorkoutRepository
 import com.cs407.cs407project.ui.GymRivalsHomeScreen
 import com.cs407.cs407project.ui.repcounter.RepCounterScreen
 import com.cs407.cs407project.ui.settings.SettingsScreen
@@ -46,6 +51,7 @@ import com.cs407.cs407project.ui.tabs.LogScreen
 import com.cs407.cs407project.ui.tabs.ProfileScreen
 import com.cs407.cs407project.ui.tabs.ProgressScreen
 import com.cs407.cs407project.ui.tabs.RivalsScreen
+import com.cs407.cs407project.ui.track.RunDetailScreen
 import com.cs407.cs407project.ui.track.TrackRunScreen
 import com.example.gymrivals.ui.GymRivalsLoginScreen
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -68,6 +74,7 @@ private object Routes {
     const val Strength = "strength_workout"
     const val RepCounter = "rep_counter"
     const val Settings = "settings"
+    const val RunDetail = "run_detail"
 }
 
 // route -> (emoji to label)
@@ -131,6 +138,7 @@ fun AppNav(
             Log.e("AppNav", "Google sign-in failed", e)
         }
     }
+    UserDataSyncEffect()
 
     Surface(color = MaterialTheme.colorScheme.background) {
         NavHost(
@@ -181,6 +189,13 @@ fun AppNav(
                     onSettingsClick = { navController.navigate(Routes.Settings) }
                 )
             }
+            tabDestination(Routes.Home, currentRoute, navController) {
+                GymRivalsHomeScreen(
+                    onRunClick = { timestampMs ->
+                        navController.navigate("${Routes.RunDetail}/$timestampMs")
+                    }
+                )
+            }
 
             // ---------- STANDALONE SCREENS (no bottom nav) ----------
 
@@ -204,8 +219,17 @@ fun AppNav(
                 SettingsScreen(
                     onBack = { navController.popBackStack() },
                     onLogout = {
+                        // Clear all in-memory workout data for the current user
+                        RunHistoryRepository.clear()
+                        StrengthWorkoutRepository.clear()
+                        RepCountRepository.clear()
+
+                        // Sign out from Firebase
                         FirebaseAuth.getInstance().signOut()
-                        // If you’re using GoogleSignInClient, you can also call googleSignInClient.signOut()
+                        // (Optional) If you want, also sign out from Google:
+                        googleSignInClient.signOut()
+
+                        // Navigate back to login, clearing the backstack
                         navController.navigate(Routes.Login) {
                             popUpTo(Routes.Home) { inclusive = true }
                             launchSingleTop = true
@@ -213,6 +237,70 @@ fun AppNav(
                     }
                 )
             }
+            composable(Routes.TrackRun) {
+                TrackRunScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.Strength) {
+                StrengthWorkoutScreen(
+                    onBack = { navController.popBackStack() },
+                    onSubmit = {
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            composable(Routes.RepCounter) {
+                RepCounterScreen(onBack = { navController.popBackStack() })
+            }
+
+
+
+// NEW: run detail
+            composable(
+                route = "${Routes.RunDetail}/{timestampMs}",
+                arguments = listOf(navArgument("timestampMs") { type = NavType.LongType })
+            ) { backStackEntry ->
+                val ts = backStackEntry.arguments?.getLong("timestampMs") ?: 0L
+                RunDetailScreen(
+                    runTimestampMs = ts,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+        }
+    }
+}
+@Composable
+private fun UserDataSyncEffect() {
+    // Re-run this effect whenever the logged-in user changes
+    val auth = FirebaseAuth.getInstance()
+    val currentUid = auth.currentUser?.uid
+
+    DisposableEffect(currentUid) {
+        // Whenever we switch users (or go to null), clear local caches
+        RunHistoryRepository.clear()
+        StrengthWorkoutRepository.clear()
+        RepCountRepository.clear()
+
+        // If no user is logged in, don't attach any listeners
+        if (currentUid == null) {
+            return@DisposableEffect onDispose { }
+        }
+
+        val runsReg = GymRivalsCloudRepository.listenRuns { runs ->
+            RunHistoryRepository.overwriteAll(runs)
+        }
+        val liftsReg = GymRivalsCloudRepository.listenStrengthWorkouts { lifts ->
+            StrengthWorkoutRepository.overwriteAll(lifts)
+        }
+        val repsReg = GymRivalsCloudRepository.listenRepSessions { sessions ->
+            RepCountRepository.overwriteAll(sessions)
+        }
+
+        onDispose {
+            runsReg?.remove()
+            liftsReg?.remove()
+            repsReg?.remove()
         }
     }
 }

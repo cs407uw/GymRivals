@@ -25,6 +25,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import com.cs407.cs407project.data.GymRivalsCloudRepository
 import com.cs407.cs407project.data.RunHistoryRepository
 import com.cs407.cs407project.data.RunEntry
+import com.cs407.cs407project.data.RunPathPoint
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
@@ -227,10 +228,20 @@ fun TrackRunScreen(
                 DestructiveButton(text = "Finish") {
                     // Create a summary entry and save it
                     val now = System.currentTimeMillis()
+
+                    // Convert LatLng path from the ViewModel to our domain RunPathPoint list
+                    val path = state.pathPoints.map { latLng ->
+                        RunPathPoint(
+                            lat = latLng.latitude,
+                            lng = latLng.longitude
+                        )
+                    }
+
                     val entry = RunEntry(
                         timestampMs = now,
                         distanceMeters = state.distanceMeters,
-                        elapsedMillis = state.elapsedMillis
+                        elapsedMillis = state.elapsedMillis,
+                        path = path
                     )
 
                     // 1) Save locally

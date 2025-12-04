@@ -77,6 +77,24 @@ fun ProgressScreen() {
             registration?.remove()
         }
     }
+    DisposableEffect(Unit) {
+        val runListener = GymRivalsCloudRepository.listenRuns { runs ->
+            RunHistoryRepository.overwriteAll(runs)
+        }
+        val strengthListener = GymRivalsCloudRepository.listenStrengthWorkouts { workouts ->
+            StrengthWorkoutRepository.overwriteAll(workouts)
+        }
+        val repListener = GymRivalsCloudRepository.listenRepSessions { sessions ->
+            RepCountRepository.overwriteAll(sessions)
+        }
+
+        onDispose {
+            runListener?.remove()
+            strengthListener?.remove()
+            repListener?.remove()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
