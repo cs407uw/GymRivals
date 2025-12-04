@@ -226,7 +226,7 @@ fun AppNav(
 
                         // Sign out from Firebase
                         FirebaseAuth.getInstance().signOut()
-                        // (Optional) If you want, also sign out from Google:
+
                         googleSignInClient.signOut()
 
                         // Navigate back to login, clearing the backstack
