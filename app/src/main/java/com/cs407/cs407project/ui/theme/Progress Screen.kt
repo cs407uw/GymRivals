@@ -211,7 +211,7 @@ fun ProgressScreen() {
                         ) {
                             SessionBarChart(
                                 values = last5.map { it.totalReps.toDouble() },
-                                bottomLabels = last5.map { "${it.durationSeconds}s" },
+                                bottomLabels = last5.map { "${it.sets}s" },
                                 topTitle = "Total reps",
                                 emptyText = "No sessions found. Start the Rep Counter to track reps!"
                             )

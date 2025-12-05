@@ -15,6 +15,7 @@ import com.cs407.cs407project.data.RepSession
 import com.cs407.cs407project.repcounter.ExerciseType
 import com.cs407.cs407project.repcounter.RepCounter
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseDetection
 import com.google.mlkit.vision.pose.PoseDetector
 import com.google.mlkit.vision.pose.accurate.AccuratePoseDetectorOptions
@@ -23,6 +24,21 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+
+/**
+ * Summary of a completed rep counting session
+ *
+ * @property reps Total number of reps completed
+ * @property timeSeconds Total time in seconds
+ * @property calories Estimated calories burned
+ * @property exerciseName Name of the exercise performed
+ */
+data class SessionSummary(
+    val reps: Int,
+    val timeSeconds: Int,
+    val calories: Int,
+    val exerciseName: String
+)
 
 /**
  * UI state for the Rep Counter screen
@@ -34,6 +50,8 @@ import java.util.concurrent.Executors
  * @property elapsedSeconds Time elapsed since session start (in seconds)
  * @property cameraError Error message if camera initialization fails
  * @property permissionGranted Whether camera permission has been granted
+ * @property sessionSummary Summary of the last completed session (shown in dialog)
+ * @property currentPose The most recent detected pose for visualization
  */
 data class RepCounterUiState(
     val isRunning: Boolean = false,
@@ -42,7 +60,9 @@ data class RepCounterUiState(
     val exerciseType: ExerciseType = ExerciseType.PUSH_UP,
     val elapsedSeconds: Int = 0,
     val cameraError: String? = null,
-    val permissionGranted: Boolean = false
+    val permissionGranted: Boolean = false,
+    val sessionSummary: SessionSummary? = null,
+    val currentPose: Pose? = null
 )
 
 /**
@@ -161,21 +181,40 @@ class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
 
-                // Select front camera
-                val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+                // Try to select front camera first, fall back to back camera if not available
+                var cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+                var camera: androidx.camera.core.Camera? = null
 
                 // Unbind all use cases before rebinding
                 cameraProvider?.unbindAll()
 
-                // Bind use cases to camera
-                cameraProvider?.bindToLifecycle(
-                    lifecycleOwner,
-                    cameraSelector,
-                    preview,
-                    imageAnalysis
-                )
-
-                Log.d(TAG, "Camera initialized successfully")
+                try {
+                    // Try front camera
+                    camera = cameraProvider?.bindToLifecycle(
+                        lifecycleOwner,
+                        cameraSelector,
+                        preview,
+                        imageAnalysis
+                    )
+                    Log.d(TAG, "Front camera initialized successfully")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Front camera not available, trying back camera", e)
+                    // Try back camera as fallback
+                    cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                    try {
+                        cameraProvider?.unbindAll()
+                        camera = cameraProvider?.bindToLifecycle(
+                            lifecycleOwner,
+                            cameraSelector,
+                            preview,
+                            imageAnalysis
+                        )
+                        Log.d(TAG, "Back camera initialized successfully")
+                    } catch (e2: Exception) {
+                        Log.e(TAG, "Both cameras failed", e2)
+                        throw e2
+                    }
+                }
 
             } catch (e: Exception) {
                 Log.e(TAG, "Camera initialization failed", e)
@@ -241,11 +280,20 @@ class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
 
         stopTimer()
 
+        val exerciseName = _state.value.exerciseType.name.replace("_", " ")
+            .lowercase()
+            .replaceFirstChar { it.uppercase() }
+
+        // Calculate calories burned
+        val calories = calculateCalories(
+            exerciseType = _state.value.exerciseType,
+            reps = _state.value.repCount,
+            durationSeconds = _state.value.elapsedSeconds
+        )
+
         // Save session to repository
         val session = RepSession(
-            exerciseType = _state.value.exerciseType.name.replace("_", " ")
-                .lowercase()
-                .replaceFirstChar { it.uppercase() },
+            exerciseType = exerciseName,
             totalReps = _state.value.repCount,
             timestampMs = System.currentTimeMillis(),
             durationSeconds = _state.value.elapsedSeconds
@@ -253,9 +301,66 @@ class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
 
         RepCountRepository.add(session)
 
-        _state.value = _state.value.copy(isRunning = false, isPaused = false)
+        // Create session summary for display
+        val summary = SessionSummary(
+            reps = _state.value.repCount,
+            timeSeconds = _state.value.elapsedSeconds,
+            calories = calories,
+            exerciseName = exerciseName
+        )
 
-        Log.d(TAG, "Stopped counting. Session saved: ${session.totalReps} reps in ${session.durationSeconds}s")
+        _state.value = _state.value.copy(
+            isRunning = false,
+            isPaused = false,
+            sessionSummary = summary
+        )
+
+        Log.d(TAG, "Stopped counting. Session saved: ${session.totalReps} reps in ${session.durationSeconds}s, ${calories} cal")
+    }
+
+    /**
+     * Dismisses the session summary dialog
+     */
+    fun dismissSummary() {
+        _state.value = _state.value.copy(sessionSummary = null)
+    }
+
+    /**
+     * Simple calorie calculation for bodyweight exercises
+     *
+     * Uses approximate MET values:
+     * - Push-ups (vigorous): 8.0 MET
+     * - Push-ups (moderate): 3.8 MET
+     * - Squats (vigorous): 5.0 MET
+     * - Squats (moderate): 3.5 MET
+     *
+     * Formula: Calories = MET × weight(kg) × duration(hours)
+     * Assumes average body weight of 70kg
+     */
+    private fun calculateCalories(
+        exerciseType: ExerciseType,
+        reps: Int,
+        durationSeconds: Int
+    ): Int {
+        if (reps <= 0 || durationSeconds <= 0) return 0
+
+        val weightKg = 70.0  // Average body weight
+        val durationHours = durationSeconds / 3600.0
+
+        // Determine intensity based on reps per minute
+        val repsPerMinute = (reps.toDouble() / durationSeconds) * 60
+
+        val met = when (exerciseType) {
+            ExerciseType.PUSH_UP -> {
+                if (repsPerMinute > 20) 8.0 else 3.8  // Vigorous vs moderate
+            }
+            ExerciseType.SQUAT -> {
+                if (repsPerMinute > 15) 5.0 else 3.5  // Vigorous vs moderate
+            }
+        }
+
+        val calories = met * weightKg * durationHours
+        return calories.toInt().coerceAtLeast(1)
     }
 
     /**
@@ -290,8 +395,12 @@ class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
         // Run pose detection
         poseDetector?.process(inputImage)
             ?.addOnSuccessListener { pose ->
-                // Pass pose to rep counter
-                repCounter?.processPose(pose)
+                // Update pose for visualization
+                if (_state.value.isRunning && !_state.value.isPaused) {
+                    _state.value = _state.value.copy(currentPose = pose)
+                    // Pass pose to rep counter
+                    repCounter?.processPose(pose)
+                }
             }
             ?.addOnFailureListener { e ->
                 Log.e(TAG, "Pose detection failed", e)

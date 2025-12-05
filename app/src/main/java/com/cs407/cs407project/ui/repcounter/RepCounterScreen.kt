@@ -1,9 +1,12 @@
 package com.cs407.cs407project.ui.repcounter
 
 import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,17 +21,23 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.google.mlkit.vision.pose.Pose
+import com.google.mlkit.vision.pose.PoseLandmark
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cs407.cs407project.repcounter.ExerciseType
 import com.cs407.cs407project.viewmodel.RepCounterViewModel
+import com.cs407.cs407project.viewmodel.SessionSummary
 
 /**
  * Main screen for rep counting with camera and pose detection
@@ -52,29 +61,37 @@ fun RepCounterScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    // Camera preview view - must be created before permission launcher
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
+
     // Camera permission launcher
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         viewModel.setCameraPermission(isGranted)
-    }
-
-    // Request camera permission on first launch
-    LaunchedEffect(Unit) {
-        permissionLauncher.launch(Manifest.permission.CAMERA)
-    }
-
-    // Camera preview view
-    val previewView = remember {
-        PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FILL_CENTER
+        if (isGranted) {
+            // Initialize camera after permission is granted
+            viewModel.initializeCamera(lifecycleOwner, previewView)
         }
     }
 
-    // Initialize camera once permission is granted
-    LaunchedEffect(state.permissionGranted) {
-        if (state.permissionGranted) {
+    // Check and request camera permission on first launch
+    LaunchedEffect(Unit) {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPermission) {
+            viewModel.setCameraPermission(true)
             viewModel.initializeCamera(lifecycleOwner, previewView)
+        } else {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -96,6 +113,14 @@ fun RepCounterScreen(
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.3f))
             )
+
+            // Pose visualization overlay
+            if (state.isRunning && state.currentPose != null) {
+                PoseOverlay(
+                    pose = state.currentPose!!,
+                    exerciseType = state.exerciseType
+                )
+            }
         } else {
             // Permission not granted - show message
             Box(
@@ -200,10 +225,7 @@ fun RepCounterScreen(
                 onStart = { viewModel.startCounting() },
                 onPause = { viewModel.pauseCounting() },
                 onResume = { viewModel.resumeCounting() },
-                onStop = {
-                    viewModel.stopCounting()
-                    onBack()
-                }
+                onStop = { viewModel.stopCounting() }
             )
 
             Spacer(Modifier.height(16.dp))
@@ -227,6 +249,17 @@ fun RepCounterScreen(
                 )
             }
         }
+    }
+
+    // Session summary dialog
+    state.sessionSummary?.let { summary ->
+        SessionSummaryDialog(
+            summary = summary,
+            onDismiss = {
+                viewModel.dismissSummary()
+                onBack()
+            }
+        )
     }
 }
 
@@ -503,4 +536,226 @@ private fun formatTime(seconds: Int): String {
     val mins = seconds / 60
     val secs = seconds % 60
     return "%02d:%02d".format(mins, secs)
+}
+
+/**
+ * Pose visualization overlay that draws skeleton and landmarks
+ *
+ * Highlights important body parts based on exercise type:
+ * - Push-ups: Arms and shoulders
+ * - Squats: Legs and hips
+ */
+@Composable
+private fun PoseOverlay(
+    pose: Pose,
+    exerciseType: ExerciseType
+) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val width = size.width
+        val height = size.height
+
+        // Helper function to get landmark position
+        fun getLandmarkPosition(landmarkType: Int): Offset? {
+            val landmark = pose.getPoseLandmark(landmarkType) ?: return null
+            // ML Kit returns normalized coordinates, need to scale to screen size
+            return Offset(
+                x = landmark.position.x,
+                y = landmark.position.y
+            )
+        }
+
+        // Helper function to draw a line between two landmarks
+        fun drawConnection(from: Int, to: Int, color: Color, strokeWidth: Float = 8f) {
+            val start = getLandmarkPosition(from)
+            val end = getLandmarkPosition(to)
+            if (start != null && end != null) {
+                drawLine(
+                    color = color,
+                    start = start,
+                    end = end,
+                    strokeWidth = strokeWidth,
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+
+        // Helper function to draw a landmark point
+        fun drawLandmark(landmarkType: Int, color: Color, radius: Float = 12f) {
+            val position = getLandmarkPosition(landmarkType)
+            if (position != null) {
+                drawCircle(
+                    color = color,
+                    radius = radius,
+                    center = position
+                )
+            }
+        }
+
+        // Define colors for different body parts
+        val primaryColor = Color(0xFF3B82F6)  // Blue
+        val highlightColor = Color(0xFFFFD700)  // Gold for important parts
+        val secondaryColor = Color(0xFF10B981)  // Green
+
+        // Determine which parts to highlight based on exercise
+        val shouldHighlightArms = exerciseType == ExerciseType.PUSH_UP
+        val shouldHighlightLegs = exerciseType == ExerciseType.SQUAT
+
+        val armColor = if (shouldHighlightArms) highlightColor else primaryColor
+        val legColor = if (shouldHighlightLegs) highlightColor else primaryColor
+
+        // Draw skeleton connections
+        // Arms
+        drawConnection(PoseLandmark.LEFT_SHOULDER, PoseLandmark.LEFT_ELBOW, armColor, 10f)
+        drawConnection(PoseLandmark.LEFT_ELBOW, PoseLandmark.LEFT_WRIST, armColor, 10f)
+        drawConnection(PoseLandmark.RIGHT_SHOULDER, PoseLandmark.RIGHT_ELBOW, armColor, 10f)
+        drawConnection(PoseLandmark.RIGHT_ELBOW, PoseLandmark.RIGHT_WRIST, armColor, 10f)
+
+        // Torso
+        drawConnection(PoseLandmark.LEFT_SHOULDER, PoseLandmark.RIGHT_SHOULDER, secondaryColor)
+        drawConnection(PoseLandmark.LEFT_SHOULDER, PoseLandmark.LEFT_HIP, secondaryColor)
+        drawConnection(PoseLandmark.RIGHT_SHOULDER, PoseLandmark.RIGHT_HIP, secondaryColor)
+        drawConnection(PoseLandmark.LEFT_HIP, PoseLandmark.RIGHT_HIP, secondaryColor)
+
+        // Legs
+        drawConnection(PoseLandmark.LEFT_HIP, PoseLandmark.LEFT_KNEE, legColor, 10f)
+        drawConnection(PoseLandmark.LEFT_KNEE, PoseLandmark.LEFT_ANKLE, legColor, 10f)
+        drawConnection(PoseLandmark.RIGHT_HIP, PoseLandmark.RIGHT_KNEE, legColor, 10f)
+        drawConnection(PoseLandmark.RIGHT_KNEE, PoseLandmark.RIGHT_ANKLE, legColor, 10f)
+
+        // Draw landmark points
+        val landmarks = listOf(
+            // Arms
+            PoseLandmark.LEFT_SHOULDER to armColor,
+            PoseLandmark.LEFT_ELBOW to armColor,
+            PoseLandmark.LEFT_WRIST to armColor,
+            PoseLandmark.RIGHT_SHOULDER to armColor,
+            PoseLandmark.RIGHT_ELBOW to armColor,
+            PoseLandmark.RIGHT_WRIST to armColor,
+            // Torso
+            PoseLandmark.LEFT_HIP to secondaryColor,
+            PoseLandmark.RIGHT_HIP to secondaryColor,
+            // Legs
+            PoseLandmark.LEFT_KNEE to legColor,
+            PoseLandmark.LEFT_ANKLE to legColor,
+            PoseLandmark.RIGHT_KNEE to legColor,
+            PoseLandmark.RIGHT_ANKLE to legColor
+        )
+
+        landmarks.forEach { (landmarkType, color) ->
+            drawLandmark(landmarkType, color)
+        }
+    }
+}
+
+/**
+ * Session summary dialog shown after completing a rep counting session
+ *
+ * Displays:
+ * - Total reps completed
+ * - Total time
+ * - Calories burned
+ */
+@Composable
+private fun SessionSummaryDialog(
+    summary: SessionSummary,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Done", color = Color(0xFF3B82F6), fontWeight = FontWeight.SemiBold)
+            }
+        },
+        title = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "🎉",
+                    fontSize = 48.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Session Complete!",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = summary.exerciseName,
+                    fontSize = 16.sp,
+                    color = Color.Gray
+                )
+
+                // Rep count
+                SummaryItem(
+                    icon = "💪",
+                    label = "Reps",
+                    value = "${summary.reps}"
+                )
+
+                // Time
+                SummaryItem(
+                    icon = "⏱️",
+                    label = "Time",
+                    value = formatTime(summary.timeSeconds)
+                )
+
+                // Calories
+                SummaryItem(
+                    icon = "🔥",
+                    label = "Calories",
+                    value = "${summary.calories} cal"
+                )
+            }
+        },
+        containerColor = Color.White,
+        shape = RoundedCornerShape(20.dp)
+    )
+}
+
+/**
+ * Summary item component for the dialog
+ */
+@Composable
+private fun SummaryItem(
+    icon: String,
+    label: String,
+    value: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFF3F4F6), RoundedCornerShape(12.dp))
+            .padding(16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = icon, fontSize = 24.sp)
+            Text(
+                text = label,
+                fontSize = 16.sp,
+                color = Color(0xFF6B7280)
+            )
+        }
+        Text(
+            text = value,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF111827)
+        )
+    }
 }
